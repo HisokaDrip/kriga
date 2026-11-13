@@ -139,7 +139,15 @@ class Matern52(_Stationary):
 
 
 class Periodic(Kernel):
-    """exp-sine-squared: k = var * exp(-2 sin^2(pi |x - x'| / p) / l^2)."""
+    """exp-sine-squared: k = var * exp(-2 sum_d sin^2(pi (x_d - x'_d) / p) / l^2).
+
+    Note the sum over dimensions *inside* the exp. The more common form
+    plugs the euclidean distance |x - x'| into the sine, and that is not
+    positive definite once d > 1 (the psd test caught this - eigenvalues
+    of -1.8 on random 3d inputs). Summing per-dimension sines is the
+    MacKay "warp to a circle" construction, so it's psd by design. In 1d
+    the two are identical.
+    """
 
     def __init__(self, lengthscale=1.0, period=1.0, variance=1.0,
                  ls_bounds=(1e-2, 1e2), period_bounds=(1e-2, 1e2), var_bounds=(1e-3, 1e3)):
@@ -153,17 +161,15 @@ class Periodic(Kernel):
         X1 = _as2d(X1)
         X2 = X1 if X2 is None else _as2d(X2)
         variance, ls, period = np.exp(self._log)
-        d2 = ((X1[:, None, :] - X2[None, :, :]) ** 2).sum(-1)
-        d = np.sqrt(d2)
-        arg = np.pi * d / period
+        arg = np.pi * (X1[:, None, :] - X2[None, :, :]) / period
         s = np.sin(arg)
-        K = variance * np.exp(-2 * s * s / ls ** 2)
+        s2 = (s * s).sum(-1)
+        K = variance * np.exp(-2 * s2 / ls ** 2)
         if not grad:
             return K
-        dvar = K
-        dls = K * 4 * s * s / ls ** 2
-        dper = K * (4 / ls ** 2) * s * np.cos(arg) * arg
-        return K, np.stack([dvar, dls, dper])
+        dls = K * 4 * s2 / ls ** 2
+        dper = K * (4 / ls ** 2) * (s * np.cos(arg) * arg).sum(-1)
+        return K, np.stack([K, dls, dper])
 
     def diag(self, X):
         return np.full(_as2d(X).shape[0], np.exp(self._log[0]))
